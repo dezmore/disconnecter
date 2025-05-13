@@ -51,27 +51,107 @@ export class DiscordBot {
         timestamp: new Date(),
         metadata: { error: error.message },
       });
+      
+      // Attempt to reconnect after error
+      this.attemptReconnect();
+    });
+    
+    // Handle disconnections and attempt to reconnect
+    this.client.on("disconnect", (event) => {
+      this.isReady = false;
+      console.error(`Bot disconnected with code ${event.code}. Reason: ${event.reason}`);
+      
+      storage.createLog({
+        event: "Bot Disconnected",
+        details: `Disconnect reason: ${event.reason}`,
+        status: "No Action",
+        timestamp: new Date(),
+        metadata: { code: event.code, reason: event.reason },
+      });
+      
+      // Attempt to reconnect
+      this.attemptReconnect();
+    });
+    
+    // Handle reconnection
+    this.client.on("reconnecting", () => {
+      console.log("Attempting to reconnect to Discord...");
+      
+      storage.createLog({
+        event: "Bot Reconnecting",
+        details: "Attempting to reconnect to Discord",
+        status: "No Action",
+        timestamp: new Date(),
+      });
+    });
+    
+    // Handle successful reconnection
+    this.client.on("resume", (replayed: number) => {
+      this.isReady = true;
+      console.log(`Successfully reconnected to Discord! Replayed ${replayed} events.`);
+      
+      storage.createLog({
+        event: "Bot Reconnected",
+        details: `Successfully reconnected to Discord. Replayed ${replayed} events.`,
+        status: "Success",
+        timestamp: new Date(),
+        metadata: { replayed },
+      });
     });
     
     // Voice state update (for tracking users joining/leaving voice channels)
     this.client.on("voiceStateUpdate", (oldState: VoiceState, newState: VoiceState) => {
-      // User joined a voice channel
-      if (!oldState.channelId && newState.channelId) {
-        console.log(`User ${newState.member?.user.tag} joined voice channel ${newState.channel?.name}`);
-      }
-      
-      // User left a voice channel
-      if (oldState.channelId && !newState.channelId) {
-        console.log(`User ${oldState.member?.user.tag} left voice channel ${oldState.channel?.name}`);
-      }
-      
-      // User moved between voice channels
-      if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
-        console.log(
-          `User ${newState.member?.user.tag} moved from ${oldState.channel?.name} to ${newState.channel?.name}`
-        );
+      try {
+        // User joined a voice channel
+        if (!oldState.channelId && newState.channelId) {
+          console.log(`User ${newState.member?.user.tag} joined voice channel ${newState.channel?.name}`);
+        }
+        
+        // User left a voice channel
+        if (oldState.channelId && !newState.channelId) {
+          console.log(`User ${oldState.member?.user.tag} left voice channel ${oldState.channel?.name}`);
+        }
+        
+        // User moved between voice channels
+        if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+          console.log(
+            `User ${newState.member?.user.tag} moved from ${oldState.channel?.name} to ${newState.channel?.name}`
+          );
+        }
+      } catch (error) {
+        console.error("Error handling voice state update:", error);
       }
     });
+  }
+  
+  // Attempt to reconnect to Discord with exponential backoff
+  private async attemptReconnect(attempt: number = 1, maxAttempts: number = 10) {
+    if (attempt > maxAttempts) {
+      console.error(`Failed to reconnect after ${maxAttempts} attempts. Giving up.`);
+      
+      storage.createLog({
+        event: "Reconnection Failed",
+        details: `Failed to reconnect after ${maxAttempts} attempts`,
+        status: "No Action",
+        timestamp: new Date(),
+        metadata: { attempts: maxAttempts },
+      });
+      
+      return;
+    }
+    
+    const delay = Math.min(30000, Math.pow(2, attempt) * 1000); // Exponential backoff with max 30 seconds
+    console.log(`Attempting to reconnect in ${delay / 1000} seconds (attempt ${attempt}/${maxAttempts})...`);
+    
+    setTimeout(async () => {
+      try {
+        await this.login();
+        console.log("Reconnected successfully!");
+      } catch (error) {
+        console.error("Failed to reconnect:", error);
+        this.attemptReconnect(attempt + 1, maxAttempts);
+      }
+    }, delay);
   }
   
   // Login to Discord
